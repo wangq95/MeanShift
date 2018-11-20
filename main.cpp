@@ -6,10 +6,9 @@ using namespace cv;
 bool roiDefined = false;
 CvRect drawing_box;
 
-void init_target(Mat hist1, Mat weight, Mat current)
+void init_target(Mat& hist, Mat& weight, Mat current, double& sum)
 {
 	int t_h, t_w, t_x, t_y;
-	int i, j;
 	int q_r, q_g, q_b, q_temp;
 
 	t_h = drawing_box.height;
@@ -17,38 +16,43 @@ void init_target(Mat hist1, Mat weight, Mat current)
 	t_x = drawing_box.x;
 	t_y = drawing_box.y;
 
+	cout << "BoundingBox, t_x=" << t_x << ", t_y=" << t_y << ", t_w=" << t_w << ", t_h=" << t_h << endl;
+
+	hist = Mat(4096, 1, CV_64FC1);
+	weight = Mat(t_h, t_w, CV_64FC1);
+
 	double r_2 = pow(((double)t_w) / 2, 2) + pow(((double)t_h) / 2, 2);            
-
-	hist1 = Scalar::all(0);
-
-	double sum = 0;
-	for (i = 0; i < t_h; i++) {
-		for (j = 0; j < t_w; j++) {
+	hist = Scalar::all(0);
+	sum = 0;
+	for (int i = 0; i < t_h; i++) {
+		for (int j = 0; j < t_w; j++) {
 			double dist = pow(i - (double)t_h / 2, 2) + pow(j - (double)t_w / 2, 2);
 			weight.at<double>(i, j) = 1 - dist / r_2;  // center has weight 1, corner has weight 0
 			sum += weight.at<double>(i, j);
 		}
 	}
+	cout << "weight calculated" << endl;
 
-	for (i = t_y; i < t_y + t_h; i++) {
-		for (j = t_x; j < t_x + t_w; j++) {
+	for (int i = t_y; i < t_y + t_h; i++) {
+		for (int j = t_x; j < t_x + t_w; j++) {
 			int q_r = current.at<Vec3b>(i, j)[0] / 16;
 			int q_g = current.at<Vec3b>(i, j)[1] / 16;
 			int q_b = current.at<Vec3b>(i, j)[2] / 16;
 			int q_temp = q_r * 256 + q_g * 16 + q_b; //4 bit for each r,g,b, total = 12 bit = 4096.
-			hist1.at<double>(q_temp) = hist1.at<double>(q_temp) + weight.at<double>(i - t_y, j - t_x);
+			hist.at<double>(q_temp) = hist.at<double>(q_temp) + weight.at<double>(i - t_y, j - t_x);
 		}
 	}
 
+	cout << "histogram created. Sum=" << sum << endl;
 	// normalize to total number of pixel
-	for (i = 0; i < 4096; i++) {
-		hist1.at<double>(i) = hist1.at<double>(i) / sum;
+	for (int i = 0; i < 4096; i++) {
+		hist.at<double>(i) = hist.at<double>(i) / sum;
 	}
 
 	double temp_max = 0.0;
-	for (i = 0; i < 4096; i++) {
-		if (temp_max < hist1.at<double>(i)) {
-			temp_max = hist1.at<double>(i);
+	for (int i = 0; i < 4096; i++) {
+		if (temp_max < hist.at<double>(i)) {
+			temp_max = hist.at<double>(i);
 		}
 	}
 
@@ -58,138 +62,97 @@ void init_target(Mat hist1, Mat weight, Mat current)
 
 	double bin_width = (double)pic_hist.cols / 4096;
 	double bin_unith = (double)pic_hist.rows / temp_max;
-
-	for (i = 0; i < 4096; i++) {
+	cout << "reday to draw histogram" << endl;
+	for (int i = 0; i < 4096; i++) {
 		p1.x = i * bin_width;
 		p1.y = pic_hist.rows;
 		p2.x = (i + 1) * bin_width;
-		p2.y = (int)(pic_hist.rows - hist1.at<double>(i) * bin_unith);
+		p2.y = (int)(pic_hist.rows - hist.at<double>(i) * bin_unith);
 		rectangle(pic_hist, p1, p2, cvScalar(0, 255, 0), 2, 8, 0);
 	}
-	imshow("hist1", pic_hist);
+	/*cout << "Show Histogram" << endl;
+	imshow("hist", pic_hist);
 	waitKey(0);
-	destroyWindow("hist1");
+	destroyWindow("hist");*/
 }
 
-void MeanShift_Tracking(Mat current)
-{
-/*	int num = 0, i = 0, j = 0;
-	int t_w = 0, t_h = 0, t_x = 0, t_y = 0;
-	double *w = 0, *hist2 = 0;
-	double sum_w = 0, x1 = 0, x2 = 0, y1 = 2.0, y2 = 2.0;
-	int q_r, q_g, q_b;
-	int *q_temp;
-	IplImage *pic_hist = 0;
+void MeanShift_Tracking(Mat current, Mat& hist, Mat& weight, double& sum) {
 
+	int t_w = 0, t_h = 0;
 	t_w = drawing_box.width;
 	t_h = drawing_box.height;
 
-	pic_hist = cvCreateImage(cvSize(300, 200), IPL_DEPTH_8U, 3);     //???????  
-	hist2 = (double *)malloc(sizeof(double) * 4096);
-	w = (double *)malloc(sizeof(double) * 4096);
-	q_temp = (int *)malloc(sizeof(int)*t_w*t_h);
+	Mat histT = Mat(4096, 1, CV_64FC1);
+	Mat w = Mat(4096, 1, CV_64FC1);
+	Mat q_temp = Mat(t_h, t_w, CV_32SC1);
 
-	while ((pow(y2, 2) + pow(y1, 2) > 0.5) && (num < 20))
+	//mean shift:
+    double xshift = 12;
+	double yshift = 12;
+
+	//loop number:
+	int num = 0;
+
+	while ((pow(xshift, 2) + pow(yshift, 2) > 12) && (num < 20))
 	{
+		int t_x = drawing_box.x;
+		int t_y = drawing_box.y;
+		
+		cout << "loope: " << num << " xshift: " << xshift << " yshift: " << yshift << endl;
 		num++;
-		t_x = drawing_box.x;
-		t_y = drawing_box.y;
-		memset(q_temp, 0, sizeof(int)*t_w*t_h);
-		for (i = 0; i<4096; i++)
-		{
-			w[i] = 0.0;
-			hist2[i] = 0.0;
-		}
+		
+		histT = Scalar::all(0);
+		w = Scalar::all(0);
+		q_temp = Scalar::all(0);
 
-		uint8_t* ptr = (uint8_t*)current.data;
-		for (i = t_y; i < t_h + t_y; i++)
-		{
-			for (j = t_x; j < t_w + t_x; j++)
-			{
-				//rgb???????16*16*16 bins  
-				q_r = (ptr[i * current.step + j * 3 + 2]) / 16;
-				q_g = (ptr[i * current.step + j * 3 + 1]) / 16;
-				q_b = (ptr[i * current.step + j * 3 + 0]) / 16;
-				q_temp[(i - t_y) *t_w + j - t_x] = q_r * 256 + q_g * 16 + q_b;
-				hist2[q_temp[(i - t_y) *t_w + j - t_x]] = hist2[q_temp[(i - t_y) *t_w + j - t_x]] + m_wei[(i - t_y) * t_w + j - t_x];
+		// calculate current histogram:
+		for (int i = t_y; i < t_y + t_h; i++) {
+			for (int j = t_x; j < t_x + t_w; j++) {
+				int q_r = current.at<Vec3b>(i, j)[0] / 16;
+				int q_g = current.at<Vec3b>(i, j)[1] / 16;
+				int q_b = current.at<Vec3b>(i, j)[2] / 16;
+				int q = q_r * 256 + q_g * 16 + q_b; //4 bit for each r,g,b, total = 12 bit = 4096.
+				q_temp.at<int>(i - t_y, j - t_x) = q;
+				histT.at<double>(q) = histT.at<double>(q) + weight.at<double>(i - t_y, j - t_x);
 			}
 		}
 
-		//??????  
-		for (i = 0; i<4096; i++)
-		{
-			hist2[i] = hist2[i] / C;
-			//printf("%f\n",hist2[i]);  
+		for (int i = 0; i < 4096; i++) {
+			histT.at<double>(i) = histT.at<double>(i) / sum;
 		}
-		//???????  
-		double temp_max = 0.0;
 
-		for (i = 0; i<4096; i++)         //???????,?????  
-		{
-			if (temp_max < hist2[i])
-			{
-				temp_max = hist2[i];
-			}
-		}
-		//????  
-		CvPoint p1, p2;
-		double bin_width = (double)pic_hist->width / (4368);
-		double bin_unith = (double)pic_hist->height / temp_max;
-
-		for (i = 0; i < 4096; i++)
-		{
-			p1.x = (int)(i * bin_width);
-			p1.y = (int)(pic_hist->height);
-			p2.x = (int)((i + 1)*bin_width);
-			p2.y = (int)(pic_hist->height - hist2[i] * bin_unith);
-			cvRectangle(pic_hist, p1, p2, cvScalar(0, 255, 0), -1, 8, 0);
-		}
-		cvSaveImage("hist2.jpg", pic_hist);
-
-		for (i = 0; i < 4096; i++)
-		{
-			if (hist2[i] != 0)
-			{
-				w[i] = sqrt(hist1[i] / hist2[i]);
-			}
-			else
-			{
-				w[i] = 0;
+		for (int i = 0; i < 4096; i++) {
+			if (histT.at<double>(i) != 0) {
+				w.at<double>(i) = sqrt(hist.at<double>(i) / histT.at<double>(i));
 			}
 		}
 
-		sum_w = 0.0;
-		x1 = 0.0;
-		x2 = 0.0;
+		double sum_w = 0.0;
+		xshift = 0.0;
+		yshift = 0.0;
 
-		for (i = 0; i < t_h; i++)
-		{
-			for (j = 0; j < t_w; j++)
-			{
-				//printf("%d\n",q_temp[i * t_w + j]);  
-				sum_w = sum_w + w[q_temp[i * t_w + j]];
-				x1 = x1 + w[q_temp[i * t_w + j]] * (i - t_h / 2);
-				x2 = x2 + w[q_temp[i * t_w + j]] * (j - t_w / 2);
+		for (int i = 0; i < t_h; i++) {
+			for (int j = 0; j < t_w; j++) {
+				double r = w.at<double>(q_temp.at<int>(i, j));  //match ratio
+				sum_w = sum_w + r;
+				//cout << r << endl;
+				xshift = xshift + r * (i - t_w / 2);
+				yshift = yshift + r * (j - t_h / 2);
 			}
 		}
-		y1 = x1 / sum_w;
-		y2 = x2 / sum_w;
-
-		//???????  
-		drawing_box.x += (int)y2;
-		drawing_box.y += (int)y1;
-
-		//printf("%d,%d\n",drawing_box.x,drawing_box.y);  
+		//cout << "========================================sum=" << sum_w << endl;
+		xshift = xshift / sum_w;
+		yshift = yshift / sum_w;
+		
+		drawing_box.x += (int)xshift;
+		drawing_box.y += (int)yshift;
+		drawing_box.x = min(0, drawing_box.x);
+		drawing_box.y = min(0, drawing_box.y);
+		drawing_box.x = max(current.cols - drawing_box.width - 1, drawing_box.x);
+		drawing_box.y = min(current.rows - drawing_box.height - 1, drawing_box.y);
 	}
-	free(hist2);
-	free(w);
-	free(q_temp);
-	//??????  
-	rectangle(current, cvPoint(drawing_box.x, drawing_box.y), cvPoint(drawing_box.x + drawing_box.width, drawing_box.y + drawing_box.height), CV_RGB(255, 0, 0), 2);
-	imshow("Meanshift", current);
-	//cvSaveImage("result.jpg",current);  
-	cvReleaseImage(&pic_hist);
-	*/
+	cout << "xshift: " << xshift << ", yshift: " << yshift << endl;
+	//histT.copyTo(hist);
 }
 
 void onMouse(int event, int x, int y, int flags, void *param)
@@ -199,6 +162,7 @@ void onMouse(int event, int x, int y, int flags, void *param)
 	switch (event)
 	{
 		case CV_EVENT_LBUTTONDOWN:
+			cout << "Button Down" << endl;
 			roiDefined = false;
 			buttonDown = true;
 			//the left up point of the rect  
@@ -214,6 +178,7 @@ void onMouse(int event, int x, int y, int flags, void *param)
 			}
 			break;
 		case CV_EVENT_LBUTTONUP:
+			cout << "Button Up" << endl;
 			buttonDown = false;
 			drawing_box.width = x - drawing_box.x;
 			drawing_box.height = y - drawing_box.y;
@@ -235,25 +200,27 @@ int main(int argc, char* argv[])
 
 	int n = 0;
 	bool initialized = false;
-	Mat hist1, hist2, weight;
+	Mat hist, weight;
+	double sum = 0;
 	while (true) {
 		capture.read(current);
 		//cvSetMouseCallback("Meanshift", onMouse, &current);
 		
 		if (roiDefined) {
+			cout << "roi defined!" << endl;
 			if (!initialized) {
-				hist1 = Mat(4096, 1, CV_64FC1); //4096 = r16 x g16 x b16
-				hist2 = Mat(4096, 1, CV_64FC1);
+				cout << "Initialize..." << endl;
+				hist = Mat(4096, 1, CV_64FC1); //4096 = r16 x g16 x b16
 				weight = Mat(drawing_box.height, drawing_box.width, CV_64FC1);
-				init_target(hist1, weight, current);
+				init_target(hist, weight, current, sum);
 				initialized = true;
 			}
-			//MeanShift_Tracking(current);
+			MeanShift_Tracking(current, hist, weight, sum);
 		}
 		else
 			initialized = false;
 
-		//cout << "Loop: " << n++ << endl;
+		cout << "Loop: " << n++ << endl;
 		rectangle(current, cvPoint(drawing_box.x, drawing_box.y), cvPoint(drawing_box.x + drawing_box.width, drawing_box.y + drawing_box.height), CV_RGB(255, 0, 0), 2);
 		imshow("Meanshift", current);
 		if(waitKey(10) == 27)

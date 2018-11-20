@@ -242,7 +242,8 @@ int main(int argc, char* argv[])
 		if(waitKey(100) == 27)
 			break;
 	}
+	current.release();
 	capture.release();
-	cvDestroyWindow("Meanshift");
+	destroyWindow("Meanshift");
 	return 0;
 }

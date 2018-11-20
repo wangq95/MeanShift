@@ -49,12 +49,16 @@ void init_target(Mat& hist, Mat& weight, Mat current, double& sum)
 		hist.at<double>(i) = hist.at<double>(i) / sum;
 	}
 
+	cout << "histogram" << endl;
 	double temp_max = 0.0;
 	for (int i = 0; i < 4096; i++) {
+		if (hist.at<double>(i) != 0)
+			cout << "i=" << i << " hist=" << hist.at<double>(i) << " " << endl;
 		if (temp_max < hist.at<double>(i)) {
 			temp_max = hist.at<double>(i);
 		}
 	}
+	cout << endl;
 
 	CvPoint p1, p2;
 	Mat pic_hist = Mat(300, 200, CV_8UC3);  
@@ -78,6 +82,8 @@ void init_target(Mat& hist, Mat& weight, Mat current, double& sum)
 
 void MeanShift_Tracking(Mat current, Mat& hist, Mat& weight, double& sum) {
 
+	cout << "tracking: " << endl;
+
 	int t_w = 0, t_h = 0;
 	t_w = drawing_box.width;
 	t_h = drawing_box.height;
@@ -87,18 +93,18 @@ void MeanShift_Tracking(Mat current, Mat& hist, Mat& weight, double& sum) {
 	Mat q_temp = Mat(t_h, t_w, CV_32SC1);
 
 	//mean shift:
+	double sum_w = 0;
     double xshift = 12;
 	double yshift = 12;
 
 	//loop number:
 	int num = 0;
 
-	while ((pow(xshift, 2) + pow(yshift, 2) > 12) && (num < 20))
+	while ((pow(xshift, 2) + pow(yshift, 2) > 2) && (num < 20))
 	{
 		int t_x = drawing_box.x;
 		int t_y = drawing_box.y;
 		
-		cout << "loope: " << num << " xshift: " << xshift << " yshift: " << yshift << endl;
 		num++;
 		
 		histT = Scalar::all(0);
@@ -123,35 +129,45 @@ void MeanShift_Tracking(Mat current, Mat& hist, Mat& weight, double& sum) {
 
 		for (int i = 0; i < 4096; i++) {
 			if (histT.at<double>(i) != 0) {
-				w.at<double>(i) = sqrt(hist.at<double>(i) / histT.at<double>(i));
+				double f = histT.at<double>(i);
+				if (f == 0)
+					w.at<double>(i) = 0;
+				else {
+					w.at<double>(i) = sqrt((double)hist.at<double>(i) / f);
+				}
 			}
 		}
 
-		double sum_w = 0.0;
+		sum_w = 0.0;
 		xshift = 0.0;
 		yshift = 0.0;
 
 		for (int i = 0; i < t_h; i++) {
 			for (int j = 0; j < t_w; j++) {
+				//cout << q_temp.at<int>(i, j) << ":";
 				double r = w.at<double>(q_temp.at<int>(i, j));  //match ratio
 				sum_w = sum_w + r;
-				//cout << r << endl;
-				xshift = xshift + r * (i - t_w / 2);
-				yshift = yshift + r * (j - t_h / 2);
+				xshift = xshift + r * (j - t_w / 2);
+				yshift = yshift + r * (i - t_h / 2);
 			}
 		}
-		//cout << "========================================sum=" << sum_w << endl;
 		xshift = xshift / sum_w;
 		yshift = yshift / sum_w;
 		
 		drawing_box.x += (int)xshift;
 		drawing_box.y += (int)yshift;
-		drawing_box.x = min(0, drawing_box.x);
-		drawing_box.y = min(0, drawing_box.y);
-		drawing_box.x = max(current.cols - drawing_box.width - 1, drawing_box.x);
+		drawing_box.x = max(0, drawing_box.x);
+		drawing_box.y = max(0, drawing_box.y);
+
+		drawing_box.x = min(current.cols - drawing_box.width - 1, drawing_box.x);
 		drawing_box.y = min(current.rows - drawing_box.height - 1, drawing_box.y);
 	}
+
+	cout << "sum_w: " << sum_w << endl;
 	cout << "xshift: " << xshift << ", yshift: " << yshift << endl;
+	cout << "after shift: " << endl;
+	cout << "BoundingBox, t_x=" << drawing_box.x << ", t_y=" << drawing_box.y << ", t_w=" << drawing_box.width << ", t_h=" << drawing_box.height << endl;
+
 	//histT.copyTo(hist);
 }
 
@@ -207,7 +223,7 @@ int main(int argc, char* argv[])
 		//cvSetMouseCallback("Meanshift", onMouse, &current);
 		
 		if (roiDefined) {
-			cout << "roi defined!" << endl;
+			//cout << "roi defined!" << endl;
 			if (!initialized) {
 				cout << "Initialize..." << endl;
 				hist = Mat(4096, 1, CV_64FC1); //4096 = r16 x g16 x b16
@@ -223,7 +239,7 @@ int main(int argc, char* argv[])
 		cout << "Loop: " << n++ << endl;
 		rectangle(current, cvPoint(drawing_box.x, drawing_box.y), cvPoint(drawing_box.x + drawing_box.width, drawing_box.y + drawing_box.height), CV_RGB(255, 0, 0), 2);
 		imshow("Meanshift", current);
-		if(waitKey(10) == 27)
+		if(waitKey(100) == 27)
 			break;
 	}
 	capture.release();
